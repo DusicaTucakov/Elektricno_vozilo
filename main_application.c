@@ -25,13 +25,14 @@ void main_demo(void);
 void led_bar_tsk(void* pvParameters);
 static void SerialSend_Task0(void* pvParameters);
 static void SerialReceive_Task0(void* pvParameters);
+static void prosek_nivoa_baterije(void* pvParameters);
 
 /* TRASNMISSION DATA - CONSTANT IN THIS APPLICATION */
 static uint16_t napon;
 
 /* RECEPTION DATA BUFFER */
 #define R_BUF_SIZE (32)
-static char r_buffer[R_BUF_SIZE]; 
+static char r_buffer[R_BUF_SIZE];
 static uint8_t volatile r_point;
 
 /* 7-SEG NUMBER DATABASE - ALL HEX DIGITS */
@@ -59,25 +60,24 @@ static void SerialReceive_Task0(void* pvParameters) {
 	uint8_t cc;
 
 	for (;;) {
-		if(xSemaphoreTake(RXC_BinarySemaphore0, portMAX_DELAY)!=pdTRUE) {
-			printf("Neuspesno");
-		}
-		
-		if(get_serial_character(COM_CH_0, &cc)!=0) {
+		if (xSemaphoreTake(RXC_BinarySemaphore0, portMAX_DELAY) != pdTRUE) {
 			printf("Neuspesno");
 		}
 
-		if (cc == (uint8_t) 'V') {
+		if (get_serial_character(COM_CH_0, &cc) != 0) {
+			printf("Neuspesno");
+		}
+
+		if (cc == (uint8_t)'V') {
 			r_point = 0;
 		}
-		else if (cc == (uint8_t)'m') {	
+		else if (cc == (uint8_t)'m') {
+			char* vrednost;
 
-			char *vrednost; 
-
-			napon = (uint16_t)strtol(r_buffer,&vrednost,10);
+			napon = (uint16_t)strtol(r_buffer, &vrednost, 10);
 			printf(" Napon: %s mV\n", r_buffer);
 
-			if(xQueueSend(napon_q, &napon, 0)!= pdTRUE) {
+			if (xQueueSend(napon_q, &napon, 0) != pdTRUE) {
 				printf("Neuspesno slanje u red");
 			}
 
@@ -85,12 +85,35 @@ static void SerialReceive_Task0(void* pvParameters) {
 			r_buffer[1] = '\0';
 			r_buffer[2] = '\0';
 			r_buffer[3] = '\0';
-			r_buffer[4] = '\0';
 		}
 		else {
-			r_buffer[r_point++] = (char) cc; 
+			r_buffer[r_point++] = (char)cc;
 		}
-	
+
+	}
+}
+
+
+static void prosek_nivoa_baterije(void* pvParameters) {
+	int v_buf = 0;
+	int brojac = 0;
+	int suma = 0;
+	int prosek;
+
+	for (;;) {
+		if (xQueueReceive(napon_q, &v_buf, portMAX_DELAY) != pdTRUE) {
+			printf("Neuspesan prijem");
+		}
+		suma = suma + v_buf;
+		brojac++;
+		if (brojac == 3) {
+			prosek = suma / 3;
+			printf("Prosek: %d mV\n", prosek);
+			brojac = 0;
+			suma = 0;
+			v_buf = 0;
+		}
+
 	}
 }
 
@@ -107,18 +130,18 @@ static uint32_t prvProcessRXCInterrupt(void) {
 // MAIN - SYSTEM STARTUP POINT 
 void main_demo(void) {
 
-	if(init_serial_uplink(COM_CH_0)!=0) {
+	if (init_serial_uplink(COM_CH_0) != 0) {
 		printf("Neuspesna inicijalizacija");
 	}
 
-	if(init_serial_downlink(COM_CH_0)!=0) {
+	if (init_serial_downlink(COM_CH_0) != 0) {
 		printf("Neuspesna inicijalizacija");
 	}
 
 	// SERIAL RECEPTION INTERRUPT HANDLER 
 	vPortSetInterruptHandler(portINTERRUPT_SRL_RXC, prvProcessRXCInterrupt);//interrupt za serijsku prijem
 
- 
+
 	RXC_BinarySemaphore0 = xSemaphoreCreateBinary();
 
 	if (RXC_BinarySemaphore0 == NULL) {
@@ -139,20 +162,33 @@ void main_demo(void) {
 
 	BaseType_t status;
 
+	status = xTaskCreate(
+		prosek_nivoa_baterije,
+		"baterija task",
+		configMINIMAL_STACK_SIZE,
+		NULL,
+		(UBaseType_t)SERVICE_TASK_PRI,
+		NULL
+	);
+	if (status != pdPASS)
+	{
+		printf("Greska pri kreiranju\n");
+	}
+
 	// SERIAL RECEIVER AND SEND TASK 
-	status=xTaskCreate(SerialReceive_Task0, "SRx", configMINIMAL_STACK_SIZE, NULL, (UBaseType_t)TASK_SERIAL_REC_PRI, NULL);
+	status = xTaskCreate(SerialReceive_Task0, "SRx", configMINIMAL_STACK_SIZE, NULL, (UBaseType_t)TASK_SERIAL_REC_PRI, NULL);
 
 	if (status != pdPASS) {
 		printf("Greska pri kreiranju\n");
 	}
-	
-	status=xTaskCreate(SerialSend_Task0, "STx", configMINIMAL_STACK_SIZE, NULL, (UBaseType_t)TASK_SERIAL_SEND_PRI, NULL);
 
-	if (status !=pdPASS) {
+	status = xTaskCreate(SerialSend_Task0, "STx", configMINIMAL_STACK_SIZE, NULL, (UBaseType_t)TASK_SERIAL_SEND_PRI, NULL);
+
+	if (status != pdPASS) {
 		printf("Greska pri kreiranju\n");
 	}
 
 	r_point = 0;
 
-    vTaskStartScheduler();
+	vTaskStartScheduler();
 }
